@@ -37,6 +37,19 @@ def _co_moved(ref: float | None, pct: float) -> bool:
     return ref is not None and ref * pct > 0 and abs(ref) >= CO_MOVE_PCT
 
 
+def macro_scope(driver: str, industry: str | None, sector: str | None) -> str | None:
+    """Which macro/political news search a move calls for. The price-based driver
+    already says whether the day was bigger than the company: market-wide days get
+    the market-level search (rates, inflation, geopolitics), industry-wide days an
+    industry-level one (regulation, export controls, tariffs). Company-specific
+    days get none, which also keeps news-API quota for the days that need it."""
+    if driver == "market_wide":
+        return "market"
+    if driver == "industry_wide" and (industry or sector):
+        return f"industry:{industry or sector}"
+    return None
+
+
 def classify_driver(pct: float, market: float | None, sector: float | None, peers: list[float]) -> str:
     """Cheap, explainable attribution from prices alone. It tells the reader
     (and the LLM) which *kind* of news to weight: a stock that fell 3% while

@@ -7,7 +7,7 @@ in at ingest time.
 """
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -76,13 +76,43 @@ class Article(Base):
     relevance: Mapped[float] = mapped_column(Float)
 
 
+class MacroFetch(Base):
+    """Marks a (day, scope) whose macro/political news search has completed.
+    Keyed by scope, not ticker: every stock in the same industry (or every stock,
+    for market-wide days) shares one search."""
+
+    __tablename__ = "macro_fetches"
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(120), primary_key=True)  # "market" | "industry:<name>"
+    fetched_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class MacroArticle(Base):
+    __tablename__ = "macro_articles"
+    __table_args__ = (UniqueConstraint("date", "scope", "url"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    scope: Mapped[str] = mapped_column(String(120), index=True)
+    topic: Mapped[str] = mapped_column(String(32))  # monetary_policy | economy | trade | geopolitics | regulation
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(String(200))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime)
+    snippet: Mapped[str | None] = mapped_column(Text)
+    relevance: Mapped[float] = mapped_column(Float)
+
+
 class Explanation(Base):
-    """Cached LLM explanation for one movement day."""
+    """Cached LLM explanation for one movement day. `macro` separates the v1
+    explanation from the v2 one, which also sees macro/political articles."""
 
     __tablename__ = "explanations"
 
     ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
     date: Mapped[date] = mapped_column(Date, primary_key=True)
+    macro: Mapped[bool] = mapped_column(Boolean, primary_key=True, default=False)
     text: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime)

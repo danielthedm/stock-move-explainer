@@ -23,6 +23,38 @@ _CATALYSTS = re.compile(
     re.IGNORECASE,
 )
 
+# Ordered: the first group that matches names the topic ("trade war" is trade, not war).
+_MACRO_TOPICS = [
+    ("monetary_policy", r"fed|federal reserve|fomc|powell|rate (cut|hike|decision|increase)s?|interest rates?|"
+                        r"central banks?|ecb|bank of (england|japan)|(treasury|bond) yields?"),
+    ("economy", r"inflation|cpi|ppi|pce|jobs report|payrolls|unemployment|jobless|gdp|recession|"
+                r"consumer (confidence|sentiment|spending)|retail sales"),
+    ("trade", r"tariffs?|trade (war|deal|talks|tensions|policy)|sanctions?|embargo|"
+              r"export (controls?|curbs?|bans?|rules?|restrictions?|licen[cs]es?)"),
+    ("geopolitics", r"geopolit\w*|war|invasion|ceasefire|missiles?|military|taiwan strait|middle east|opec|oil prices?"),
+    ("regulation", r"regulat\w*|antitrust|legislation|executive order|bans?|banned|doj|ftc|supreme court|"
+                   r"congress|senate|white house|government shutdown|debt ceiling|elections?"),
+]
+_MACRO_TOPICS = [(topic, re.compile(rf"\b({pattern})\b", re.IGNORECASE)) for topic, pattern in _MACRO_TOPICS]
+_MARKET_WORDS = re.compile(
+    r"\b(stocks?|shares|markets?|wall street|s&p|nasdaq|dow|investors|sell-?off|rall(y|ies|ied)|slides?|tumbles?)\b",
+    re.IGNORECASE,
+)
+
+
+def macro_topic(title: str, snippet: str | None = None) -> str | None:
+    """'rate decisions, regulation, geopolitics': tag an article with the macro or
+    political theme it is about, title first. None = not a macro story."""
+    for text in (title, snippet or ""):
+        for topic, pattern in _MACRO_TOPICS:
+            if pattern.search(text):
+                return topic
+    return None
+
+
+def url_key(url: str) -> str:
+    return url.split("?")[0].rstrip("/").lower()
+
 
 def short_name(name: str) -> str:
     """'NVIDIA Corporation' -> 'NVIDIA', 'Amazon.com, Inc.' -> 'Amazon'."""
@@ -73,6 +105,51 @@ def balanced_top(articles: list, n: int) -> list:
     return sorted(picked, key=lambda a: a.relevance, reverse=True)
 
 
+def _is_duplicate(a: RawArticle, seen_urls: set[str], seen_titles: set[str]) -> bool:
+    """Syndicated copies: same URL (ignoring query string) or same normalised title."""
+    u, t = url_key(a.url), _norm_title(a.title)
+    if u in seen_urls or t in seen_titles:
+        return True
+    seen_urls.add(u)
+    seen_titles.add(t)
+    return False
+
+
+def _timing_bonus(a: RawArticle, move_date: date, prev_trading_date: date) -> float:
+    if not a.published_at:
+        return 0.0
+    pub = a.published_at.date()
+    if prev_trading_date <= pub <= move_date:
+        return 0.20  # could have caused the move
+    if pub == move_date + timedelta(days=1):
+        return 0.10  # next-day recap ("shares fell yesterday after...")
+    return 0.0
+
+
+def rank_macro(
+    articles: list[RawArticle], *, move_date: date, prev_trading_date: date, limit: int
+) -> list[tuple[RawArticle, str, float]]:
+    """Macro/political results as (article, topic, relevance). Unlike company news
+    there is no entity to match, so the gate is macro vocabulary: a story must be
+    about rates, the economy, trade, geopolitics or regulation to survive."""
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    ranked = []
+    for a in articles:
+        if _is_duplicate(a, seen_urls, seen_titles):
+            continue
+        topic = macro_topic(a.title, a.snippet)
+        if topic is None:
+            continue
+        score = 0.45 if macro_topic(a.title) else 0.25  # headline story vs passing mention in the snippet
+        score += _timing_bonus(a, move_date, prev_trading_date)
+        if _MARKET_WORDS.search(a.title):
+            score += 0.15  # ties the event to a market reaction
+        ranked.append((a, topic, round(min(score, 1.0), 3)))
+    ranked.sort(key=lambda r: r[2], reverse=True)
+    return ranked[:limit]
+
+
 def rank_articles(
     articles: list[RawArticle],
     *,
@@ -89,12 +166,8 @@ def rank_articles(
     ranked: list[RankedArticle] = []
 
     for a in articles:
-        url_key = a.url.split("?")[0].rstrip("/").lower()
-        title_key = _norm_title(a.title)
-        if url_key in seen_urls or title_key in seen_titles:
-            continue  # syndicated copies
-        seen_urls.add(url_key)
-        seen_titles.add(title_key)
+        if _is_duplicate(a, seen_urls, seen_titles):
+            continue
 
         title, body = a.title, a.snippet or ""
         if _mentions(title, company_names, company_tickers):
@@ -108,12 +181,7 @@ def rank_articles(
         else:
             continue  # irrelevant to this company and its industry
 
-        if a.published_at:
-            pub = a.published_at.date()
-            if prev_trading_date <= pub <= move_date:
-                score += 0.20  # could have caused the move
-            elif pub == move_date + timedelta(days=1):
-                score += 0.10  # next-day recap ("shares fell yesterday after...")
+        score += _timing_bonus(a, move_date, prev_trading_date)
         if _CATALYSTS.search(title):
             score += 0.15
         ranked.append(RankedArticle(raw=a, category=category, relevance=round(min(score, 1.0), 3)))

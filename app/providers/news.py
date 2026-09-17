@@ -81,7 +81,7 @@ class ExaNewsProvider:
             snippet = " … ".join(highlights)
             articles.append(
                 RawArticle(
-                    title=r["title"].strip(),
+                    title=" ".join(r["title"].split()),  # live titles can contain newlines
                     url=r["url"],
                     source=_host(r["url"]),
                     published_at=_parse_dt(r.get("publishedDate")),

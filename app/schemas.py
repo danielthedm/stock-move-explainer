@@ -37,24 +37,26 @@ class MarketContext(BaseModel):
     """What else moved that day - the price-side evidence for attribution."""
 
     market_symbol: str
-    market_pct: float | None
+    market_pct_change: float | None
     sector_etf: str | None
-    sector_pct: float | None
+    sector_pct_change: float | None
     peers: list[PeerMove]
-    peer_median_pct: float | None
-    excess_vs_sector_pct: float | None
+    peer_median_pct_change: float | None
+    excess_vs_sector_pct: float | None  # percentage points: stock pct_change - sector pct_change
     driver: Literal["company_specific", "industry_wide", "market_wide"]
 
 
 class ArticleOut(BaseModel):
-    id: int
-    category: Literal["company", "industry"]
+    category: Literal["company", "industry", "macro"]
     title: str
     url: str
     source: str | None
     published_at: datetime | None
     snippet: str | None
     relevance: float
+    # Macro/political theme, for any category: an [industry] story about export
+    # controls is tagged "trade". None = not a macro story.
+    macro_topic: Literal["monetary_policy", "economy", "trade", "geopolitics", "regulation"] | None = None
 
 
 class MovementOut(BaseModel):
@@ -66,14 +68,59 @@ class MovementOut(BaseModel):
     zscore: float | None
     context: MarketContext
     news_status: Literal["fetched", "not_fetched"]
+    # not_applicable: a company-specific move, so no macro search is made for it.
+    macro_status: Literal["fetched", "not_fetched", "not_applicable"] = "not_applicable"
     articles: list[ArticleOut]
+
+
+class MovementQuery(BaseModel):
+    """Query parameters shared by every endpoint that lists movements."""
+
+    start: date | None = Field(None, description="Default: end - 90 days")
+    end: date | None = Field(None, description="Default: today")
+    min_change_pct: float | None = Field(
+        None, ge=0, le=100, description="Min absolute daily % change to count as a movement (default 2.0)"
+    )
+    min_zscore: float | None = Field(
+        None, ge=0, description="Also require |move| >= N x the stock's trailing 30-day volatility"
+    )
+    direction: Literal["any", "up", "down"] = "any"
+    news_category: Literal["all", "company", "industry", "macro"] = "all"
+    min_relevance: float = Field(0.0, ge=0, le=1)
+    max_articles: int = Field(10, ge=0, le=20, description="Per movement")
+    refresh: bool = Field(False, description="Bypass the cache and re-fetch prices and news")
+
+
+class ReportQuery(MovementQuery):
+    include_prices: bool = Field(True, description="Include the daily OHLCV series")
+
+
+class FiltersOut(BaseModel):
+    """The filters as applied (defaults resolved), echoed back to the caller."""
+
+    min_change_pct: float
+    min_zscore: float | None
+    direction: Literal["any", "up", "down"]
+    news_category: Literal["all", "company", "industry", "macro"]
+    min_relevance: float
+    max_articles: int
+
+
+class MovementList(BaseModel):
+    ticker: str
+    start: date
+    end: date
+    filters: FiltersOut
+    movement_count: int
+    movements: list[MovementOut]
+    warnings: list[str] = []
 
 
 class StockReport(BaseModel):
     company: CompanyOut
     start: date
     end: date
-    filters: dict
+    filters: FiltersOut
     movement_count: int
     movements: list[MovementOut]
     prices: list[PricePoint] | None = None

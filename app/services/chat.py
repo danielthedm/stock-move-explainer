@@ -24,6 +24,8 @@ Rules:
 - Use the price context: if the market or sector moved the same way, say the move looks market- or \
 industry-driven rather than company-specific, and prefer [industry] articles. If peers were flat, prefer \
 [company] articles.
+- [macro] articles are macroeconomic or political events (rate decisions, inflation data, tariffs, export \
+controls, geopolitics, regulation). Use them to explain market-wide and industry-wide moves, and name the event.
 - News explains moves probabilistically. Say "likely" / "coincided with", and say plainly when no article \
 in the context explains a move.
 - If the question is outside the context (other tickers, dates outside the window, predictions, investment \
@@ -53,7 +55,7 @@ def build_context(company: CompanyOut, movements: list[MovementOut], start, end,
         z = f", {m.zscore:+.1f} sigma vs trailing volatility" if m.zscore is not None else ""
         lines.append(
             f"## {m.date}: {company.ticker} {m.pct_change:+.2f}% (close {m.close}{z}) | "
-            f"{c.market_symbol} {_fmt(c.market_pct)} | sector {c.sector_etf or ''} {_fmt(c.sector_pct)} | "
+            f"{c.market_symbol} {_fmt(c.market_pct_change)} | sector {c.sector_etf or ''} {_fmt(c.sector_pct_change)} | "
             f"peers: {peer_txt} | price-based driver: {c.driver}"
         )
         if not m.articles:

@@ -42,6 +42,8 @@ NEWS = [
      "https://example.com/amd-tumble", "Advanced Micro Devices led chipmakers lower."),
     (datetime(2026, 5, 5, 15, 0), "NVIDIA shares fall with broader market", "https://example.com/nvda-market",
      "Stocks dropped across the board."),
+    (datetime(2026, 5, 5, 18, 30), "Fed holds rates but signals fewer cuts as inflation stays hot; Wall Street slides",
+     "https://example.com/fed-decision", "The S&P 500 fell 1.8% after the FOMC statement."),
 ]
 
 

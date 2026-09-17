@@ -1,7 +1,7 @@
 """Run the real API against deterministic fake upstreams: no keys, no network.
 
     python -m scripts.offline_demo          # http://127.0.0.1:8001/docs
-    curl "localhost:8001/stocks/NVDA?start=2026-03-01&end=2026-05-31"
+    curl "localhost:8001/v2/stocks/NVDA?start=2026-03-01&end=2026-05-31"
 
 Only NVDA (with peers AMD/AVGO) has scripted data; chat runs in extractive mode
 unless an LLM key is set in the environment/.env.

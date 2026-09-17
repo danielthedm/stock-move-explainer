@@ -9,30 +9,21 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import Article, Company, NewsFetch, PriceBar, PriceCoverage
+from app.models import Article, Company, MacroArticle, MacroFetch, NewsFetch, PriceBar, PriceCoverage
 from app.providers.base import ProviderError, TickerNotFound
 from app.providers.news import NewsProvider, NewsQuery, RawArticle
 from app.providers.prices import PriceProvider
-from app.services.movements import compute_metrics
+from app.services.analysis import LOOKBACK_BUFFER_DAYS, load_metrics, market_context, symbols_for
+from app.services.movements import compute_metrics, macro_scope
+from app.services.ranking import rank_articles, rank_macro, short_name
 from app.timeutil import utcnow
-from app.services.ranking import rank_articles, short_name
 
-# Trailing history needed before `start` so the first day has a z-score.
-LOOKBACK_BUFFER_DAYS = 70
 PROFILE_TTL = timedelta(days=30)
 TODAY_BAR_TTL = timedelta(hours=1)
 
 # One ingest per ticker at a time (single-process guard; see README for the
 # multi-worker story).
 _locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
-
-
-def symbols_for(company: Company, settings: Settings) -> list[str]:
-    symbols = [company.ticker, settings.benchmark_symbol]
-    if company.sector_etf:
-        symbols.append(company.sector_etf)
-    symbols += [p["symbol"] for p in company.peers or []]
-    return list(dict.fromkeys(symbols))
 
 
 def ensure_data(
@@ -45,12 +36,17 @@ def ensure_data(
     end: date,
     min_change_pct: float,
     refresh: bool = False,
+    macro: bool = False,
 ) -> tuple[Company, list[str]]:
+    """`macro` (API v2) also searches macro/political news for the movement days
+    whose price context says the move was bigger than the company."""
     with _locks[ticker]:
         try:
             company = _ensure_company(db, settings, prices, ticker, refresh)
             _ensure_prices(db, settings, prices, company, start, end, refresh)
             warnings = _ensure_news(db, settings, news, company, start, end, min_change_pct, refresh)
+            if macro:
+                warnings += _ensure_macro(db, settings, news, company, start, end, min_change_pct, refresh)
             db.commit()
             return company, warnings
         except Exception:
@@ -145,6 +141,77 @@ def _news_queries(company: Company, window: tuple[date, date], limit: int) -> di
     return queries
 
 
+def _macro_query(scope: str, company: Company, window: tuple[date, date], limit: int) -> NewsQuery:
+    start, end = window
+    if scope == "market":
+        return NewsQuery(
+            terms=["Federal Reserve", "inflation", "tariffs", "stock market"],
+            text="Macroeconomic and political news moving US stock markets: Federal Reserve interest rate "
+            "decision, inflation and jobs data, tariffs and trade policy, geopolitics, government regulation",
+            start=start,
+            end=end,
+            limit=limit,
+        )
+    industry = scope.removeprefix("industry:")
+    return NewsQuery(
+        terms=[industry, "tariffs", "regulation", "export controls", "sanctions"],
+        text=f"Government policy, regulation, tariffs, export controls, sanctions and geopolitics affecting the "
+        f"{industry} industry" + (f" and {company.sector} stocks" if company.sector else ""),
+        start=start,
+        end=end,
+        limit=limit,
+    )
+
+
+def _movement_days(db: Session, company: Company, start: date, end: date, min_change_pct: float):
+    """(movement rows, all trading dates incl. the lookback buffer)."""
+    bars = db.scalars(
+        select(PriceBar).where(
+            PriceBar.symbol == company.ticker,
+            PriceBar.date >= start - timedelta(days=LOOKBACK_BUFFER_DAYS),
+            PriceBar.date <= end,
+        )
+    ).all()
+    df = compute_metrics(bars)
+    return df[(df.index >= start) & (df["pct_change"].abs() >= min_change_pct)], list(df.index)
+
+
+def _search_window(dates: list[date], d: date) -> tuple[date, date]:
+    """News can land after the previous close (earnings calls, weekend events),
+    so search from the previous trading day through the day after the move."""
+    i = dates.index(d)
+    return (dates[i - 1] if i > 0 else d - timedelta(days=1), d + timedelta(days=1))
+
+
+def _cap(pending: list[date], moves, settings: Settings, what: str) -> tuple[list[date], list[str]]:
+    """Biggest moves first: they are what users ask about, and quota is finite."""
+    pending = sorted(pending, key=lambda d: abs(moves.loc[d, "pct_change"]), reverse=True)
+    batch, deferred = pending[: settings.max_news_movements], pending[settings.max_news_movements :]
+    if not deferred:
+        return batch, []
+    return batch, [
+        f"{len(deferred)} smaller movement day(s) not yet enriched with {what} (per-request cap "
+        f"{settings.max_news_movements}). Repeat the request to continue."
+    ]
+
+
+def _run_searches(
+    news: NewsProvider, settings: Settings, tasks: list[tuple[date, NewsQuery]], what: str
+) -> tuple[dict[date, list[RawArticle]], set[date], list[str]]:
+    results: dict[date, list[RawArticle]] = defaultdict(list)
+    failed: set[date] = set()
+    warnings: list[str] = []
+    with ThreadPoolExecutor(max_workers=settings.news_concurrency) as pool:
+        futures = {pool.submit(news.search, q): d for d, q in tasks}
+        for future, d in futures.items():
+            try:
+                results[d].extend(future.result())
+            except ProviderError as exc:
+                failed.add(d)
+                warnings.append(f"{what} search failed for {d}: {exc}")
+    return results, failed, warnings
+
+
 def _ensure_news(
     db: Session,
     settings: Settings,
@@ -155,59 +222,25 @@ def _ensure_news(
     min_change_pct: float,
     refresh: bool,
 ) -> list[str]:
-    warnings: list[str] = []
-    bars = db.scalars(
-        select(PriceBar).where(
-            PriceBar.symbol == company.ticker,
-            PriceBar.date >= start - timedelta(days=LOOKBACK_BUFFER_DAYS),
-            PriceBar.date <= end,
-        )
-    ).all()
-    df = compute_metrics(bars)
-    dates = list(df.index)
-    moves = df[(df.index >= start) & (df["pct_change"].abs() >= min_change_pct)]
-
+    moves, dates = _movement_days(db, company, start, end, min_change_pct)
     done = set(
         db.scalars(select(NewsFetch.date).where(NewsFetch.ticker == company.ticker, NewsFetch.date.in_(list(moves.index))))
     )
     pending = [d for d in moves.index if refresh or d not in done]
     if not pending:
-        return warnings
+        return []
     if news is None:
         return [f"No news provider configured: {len(pending)} movement day(s) have no articles. Set EXA_API_KEY or NEWSAPI_API_KEY."]
 
-    # Biggest moves first: they are what users ask about, and quota is finite.
-    pending.sort(key=lambda d: abs(moves.loc[d, "pct_change"]), reverse=True)
-    batch, deferred = pending[: settings.max_news_movements], pending[settings.max_news_movements :]
-    if deferred:
-        warnings.append(
-            f"{len(deferred)} smaller movement day(s) not yet enriched with news (per-request cap "
-            f"{settings.max_news_movements}). Repeat the request to continue."
-        )
-
-    # News can land after the previous close (earnings calls, weekend events),
-    # so search from the previous trading day through the day after the move.
-    windows = {}
-    for d in batch:
-        i = dates.index(d)
-        prev_trading = dates[i - 1] if i > 0 else d - timedelta(days=1)
-        windows[d] = (prev_trading, d + timedelta(days=1))
-
+    batch, warnings = _cap(pending, moves, settings, "news")
+    windows = {d: _search_window(dates, d) for d in batch}
     tasks = [
-        (d, kind, q)
+        (d, q)
         for d in batch
-        for kind, q in _news_queries(company, windows[d], settings.articles_per_category * 2).items()
+        for q in _news_queries(company, windows[d], settings.articles_per_category * 2).values()
     ]
-    results: dict[date, list[RawArticle]] = defaultdict(list)
-    failed: set[date] = set()
-    with ThreadPoolExecutor(max_workers=settings.news_concurrency) as pool:
-        futures = {pool.submit(news.search, q): d for d, _, q in tasks}
-        for future, d in futures.items():
-            try:
-                results[d].extend(future.result())
-            except ProviderError as exc:
-                failed.add(d)
-                warnings.append(f"News search failed for {d}: {exc}")
+    results, failed, search_warnings = _run_searches(news, settings, tasks, "News")
+    warnings += search_warnings
 
     name = short_name(company.name)
     peers = company.peers or []
@@ -241,5 +274,60 @@ def _ensure_news(
             for r in ranked
         )
         db.merge(NewsFetch(ticker=company.ticker, date=d, fetched_at=now))
+    db.flush()
+    return warnings
+
+
+def _ensure_macro(
+    db: Session,
+    settings: Settings,
+    news: NewsProvider | None,
+    company: Company,
+    start: date,
+    end: date,
+    min_change_pct: float,
+    refresh: bool,
+) -> list[str]:
+    """Macro/political news ("hard" tier). One search per (day, scope), cached
+    across tickers: NVDA and AMD falling on the same Fed day share the result."""
+    if news is None:
+        return []  # _ensure_news already warned that no provider is configured
+    moves, dates = _movement_days(db, company, start, end, min_change_pct)
+    if moves.empty:
+        return []
+    metrics = load_metrics(db, company, settings, start, end)
+    scopes: dict[date, str] = {}
+    for d in moves.index:
+        driver = market_context(metrics, company, settings, d, float(moves.loc[d, "pct_change"])).driver
+        if scope := macro_scope(driver, company.industry, company.sector):
+            scopes[d] = scope
+
+    done = {(f.date, f.scope) for f in db.scalars(select(MacroFetch).where(MacroFetch.date.in_(list(scopes))))}
+    pending = [d for d in scopes if refresh or (d, scopes[d]) not in done]
+    if not pending:
+        return []
+
+    batch, warnings = _cap(pending, moves, settings, "macro news")
+    windows = {d: _search_window(dates, d) for d in batch}
+    tasks = [(d, _macro_query(scopes[d], company, windows[d], settings.articles_per_category * 2)) for d in batch]
+    results, failed, search_warnings = _run_searches(news, settings, tasks, "Macro news")
+    warnings += search_warnings
+
+    now = utcnow()
+    for d in batch:
+        if d in failed:
+            continue
+        ranked = rank_macro(
+            results[d], move_date=d, prev_trading_date=windows[d][0], limit=settings.articles_per_category
+        )
+        db.execute(delete(MacroArticle).where(MacroArticle.date == d, MacroArticle.scope == scopes[d]))
+        db.add_all(
+            MacroArticle(
+                date=d, scope=scopes[d], topic=topic, title=raw.title, url=raw.url, source=raw.source,
+                published_at=raw.published_at, snippet=raw.snippet, relevance=relevance,
+            )
+            for raw, topic, relevance in ranked
+        )
+        db.merge(MacroFetch(date=d, scope=scopes[d], fetched_at=now))
     db.flush()
     return warnings

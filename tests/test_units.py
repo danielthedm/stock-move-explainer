@@ -4,8 +4,8 @@ import pytest
 
 from app.providers.news import RawArticle
 from app.providers.prices import Bar
-from app.services.movements import classify_driver, compute_metrics
-from app.services.ranking import balanced_top, rank_articles, short_name
+from app.services.movements import classify_driver, compute_metrics, macro_scope
+from app.services.ranking import balanced_top, macro_topic, rank_articles, rank_macro, short_name
 from tests.fakes import business_days
 
 
@@ -120,3 +120,53 @@ def test_balanced_top_keeps_industry_news_when_truncating():
     assert len(balanced_top(arts, 20)) == 8 and balanced_top(arts, 0) == [] and balanced_top([], 3) == []
     only_company = balanced_top(arts[:5], 3)
     assert [a.id for a in only_company] == [0, 1, 2]  # one category: plain top-n
+
+
+def test_macro_scope_follows_the_price_driver():
+    assert macro_scope("market_wide", "Semiconductors", "Technology") == "market"
+    assert macro_scope("industry_wide", "Semiconductors", "Technology") == "industry:Semiconductors"
+    assert macro_scope("industry_wide", None, "Technology") == "industry:Technology"
+    assert macro_scope("industry_wide", None, None) is None
+    assert macro_scope("company_specific", "Semiconductors", "Technology") is None
+
+
+@pytest.mark.parametrize("title,topic", [
+    ("Fed cuts interest rates by a quarter point", "monetary_policy"),
+    ("Hot CPI print revives inflation fears", "economy"),
+    ("Trump threatens new tariffs as trade war escalates", "trade"),  # "war" alone would be geopolitics
+    ("US tightens export controls on AI chips to China", "trade"),
+    ("Oil prices spike after missile strike in the Middle East", "geopolitics"),
+    ("EU regulators open antitrust case against cloud providers", "regulation"),
+    ("Nvidia unveils new GPU at annual conference", None),
+    ("Federated learning startup raises $20M", None),  # whole words only: not "Fed"
+])
+def test_macro_topic(title, topic):
+    assert macro_topic(title) == topic
+
+
+def test_macro_topic_prefers_title_then_snippet():
+    assert macro_topic("Chip stocks slide", "Traders blamed new tariffs on imports.") == "trade"
+    assert macro_topic("Fed decision looms", "Tariffs also weighed.") == "monetary_policy"
+
+
+def test_rank_macro_gates_on_vocabulary_and_dedupes():
+    def art(title, url, day, snippet=None):
+        return RawArticle(title=title, url=url, published_at=datetime(2026, 5, day, 12), snippet=snippet)
+
+    ranked = rank_macro(
+        [
+            art("Fed holds rates; Wall Street slides", "https://a.com/fed", 5),
+            art("Fed holds rates: Wall Street slides", "https://b.com/copy", 5),  # syndicated copy
+            art("Stocks fall for a third day", "https://a.com/stocks", 5, "Investors cited new tariffs."),
+            art("Celebrity chef opens restaurant", "https://a.com/chef", 5),  # no macro vocabulary -> dropped
+            art("ECB signals rate cut", "https://a.com/ecb", 1),  # outside the window: no timing bonus
+        ],
+        move_date=date(2026, 5, 5), prev_trading_date=date(2026, 5, 4), limit=5,
+    )
+    assert [(a.url, topic, rel) for a, topic, rel in ranked] == [
+        ("https://a.com/fed", "monetary_policy", 0.8),
+        ("https://a.com/stocks", "trade", 0.6),  # 0.25 snippet-only + 0.20 timing + 0.15 market words
+        ("https://a.com/ecb", "monetary_policy", 0.45),
+    ]
+    many = [art(f"Fed speaker {i} talks rates", f"https://a.com/{i}", 5) for i in range(9)]
+    assert len(rank_macro(many, move_date=date(2026, 5, 5), prev_trading_date=date(2026, 5, 4), limit=5)) == 5

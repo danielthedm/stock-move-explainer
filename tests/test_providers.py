@@ -24,7 +24,7 @@ def test_exa_request_and_parse():
     def handler(req: httpx.Request):
         seen["headers"], seen["body"], seen["url"] = req.headers, json.loads(req.content), str(req.url)
         return httpx.Response(200, json={"requestId": "r", "results": [
-            {"id": "1", "title": " Nvidia soars ", "url": "https://www.reuters.com/a", "publishedDate": "2026-03-10T13:00:00.000Z",
+            {"id": "1", "title": " Nvidia\n soars ", "url": "https://www.reuters.com/a", "publishedDate": "2026-03-10T13:00:00.000Z",
              "author": "x", "highlights": ["Shares rose 6%.", "Guidance raised."]},
             {"id": "2", "title": None, "url": "https://bad.example"},
         ]})
