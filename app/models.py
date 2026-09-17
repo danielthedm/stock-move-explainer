@@ -1,10 +1,3 @@
-"""Storage model.
-
-Only *facts* are stored (bars, articles, explanations). Derived numbers
-(% change, z-score, peer/sector context) are computed on read, so the
-"major movement" definition is a query-time filter rather than something baked
-in at ingest time.
-"""
 from datetime import date, datetime
 
 from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
@@ -21,13 +14,11 @@ class Company(Base):
     sector: Mapped[str | None] = mapped_column(String(100))
     industry: Mapped[str | None] = mapped_column(String(100))
     sector_etf: Mapped[str | None] = mapped_column(String(16))
-    peers: Mapped[list] = mapped_column(JSON, default=list)  # [{"symbol","name"}]
+    peers: Mapped[list] = mapped_column(JSON, default=list)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class PriceBar(Base):
-    """Daily adjusted OHLCV for any symbol (target, peers, sector ETF, SPY)."""
-
     __tablename__ = "price_bars"
 
     symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
@@ -40,8 +31,6 @@ class PriceBar(Base):
 
 
 class PriceCoverage(Base):
-    """Date range already fetched per symbol (the read-through cache index)."""
-
     __tablename__ = "price_coverage"
 
     symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
@@ -51,8 +40,6 @@ class PriceCoverage(Base):
 
 
 class NewsFetch(Base):
-    """Marks a movement day whose news search has completed (even if empty)."""
-
     __tablename__ = "news_fetches"
 
     ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
@@ -67,7 +54,7 @@ class Article(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     move_date: Mapped[date] = mapped_column(Date, index=True)
-    category: Mapped[str] = mapped_column(String(16))  # company | industry
+    category: Mapped[str] = mapped_column(String(16))
     title: Mapped[str] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(200))
@@ -77,14 +64,10 @@ class Article(Base):
 
 
 class MacroFetch(Base):
-    """Marks a (day, scope) whose macro/political news search has completed.
-    Keyed by scope, not ticker: every stock in the same industry (or every stock,
-    for market-wide days) shares one search."""
-
     __tablename__ = "macro_fetches"
 
     date: Mapped[date] = mapped_column(Date, primary_key=True)
-    scope: Mapped[str] = mapped_column(String(120), primary_key=True)  # "market" | "industry:<name>"
+    scope: Mapped[str] = mapped_column(String(120), primary_key=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime)
 
 
@@ -95,7 +78,7 @@ class MacroArticle(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     date: Mapped[date] = mapped_column(Date, index=True)
     scope: Mapped[str] = mapped_column(String(120), index=True)
-    topic: Mapped[str] = mapped_column(String(32))  # monetary_policy | economy | trade | geopolitics | regulation
+    topic: Mapped[str] = mapped_column(String(32))
     title: Mapped[str] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(200))
@@ -105,9 +88,6 @@ class MacroArticle(Base):
 
 
 class Explanation(Base):
-    """Cached LLM explanation for one movement day. `macro` separates the v1
-    explanation from the v2 one, which also sees macro/political articles."""
-
     __tablename__ = "explanations"
 
     ticker: Mapped[str] = mapped_column(String(16), primary_key=True)

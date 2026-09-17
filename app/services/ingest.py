@@ -1,9 +1,7 @@
-"""Read-through ingestion: make sure everything needed to answer a request for
-(ticker, start, end) is in the DB, fetching only what is missing."""
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -21,8 +19,6 @@ from app.timeutil import utcnow
 PROFILE_TTL = timedelta(days=30)
 TODAY_BAR_TTL = timedelta(hours=1)
 
-# One ingest per ticker at a time (single-process guard; see README for the
-# multi-worker story).
 _locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
@@ -38,8 +34,6 @@ def ensure_data(
     refresh: bool = False,
     macro: bool = False,
 ) -> tuple[Company, list[str]]:
-    """`macro` (API v2) also searches macro/political news for the movement days
-    whose price context says the move was bigger than the company."""
     with _locks[ticker]:
         try:
             company = _ensure_company(db, settings, prices, ticker, refresh)
@@ -89,7 +83,7 @@ def _ensure_prices(
         today_bar_stale = cov is not None and want_end >= today and now - cov.fetched_at > TODAY_BAR_TTL
         if refresh or not covered or today_bar_stale:
             stale.append(symbol)
-            if cov:  # widen so stored coverage stays one contiguous range
+            if cov:
                 fetch_start, fetch_end = min(fetch_start, cov.start), max(fetch_end, cov.end)
 
     if stale:
@@ -97,7 +91,7 @@ def _ensure_prices(
         for symbol in stale:
             bars = history.get(symbol, [])
             if not bars:
-                continue  # a delisted peer shouldn't fail the request
+                continue
             db.execute(
                 delete(PriceBar).where(
                     PriceBar.symbol == symbol, PriceBar.date >= fetch_start, PriceBar.date <= fetch_end
@@ -164,7 +158,6 @@ def _macro_query(scope: str, company: Company, window: tuple[date, date], limit:
 
 
 def _movement_days(db: Session, company: Company, start: date, end: date, min_change_pct: float):
-    """(movement rows, all trading dates incl. the lookback buffer)."""
     bars = db.scalars(
         select(PriceBar).where(
             PriceBar.symbol == company.ticker,
@@ -177,14 +170,11 @@ def _movement_days(db: Session, company: Company, start: date, end: date, min_ch
 
 
 def _search_window(dates: list[date], d: date) -> tuple[date, date]:
-    """News can land after the previous close (earnings calls, weekend events),
-    so search from the previous trading day through the day after the move."""
     i = dates.index(d)
     return (dates[i - 1] if i > 0 else d - timedelta(days=1), d + timedelta(days=1))
 
 
 def _cap(pending: list[date], moves, settings: Settings, what: str) -> tuple[list[date], list[str]]:
-    """Biggest moves first: they are what users ask about, and quota is finite."""
     pending = sorted(pending, key=lambda d: abs(moves.loc[d, "pct_change"]), reverse=True)
     batch, deferred = pending[: settings.max_news_movements], pending[settings.max_news_movements :]
     if not deferred:
@@ -247,7 +237,7 @@ def _ensure_news(
     now = utcnow()
     for d in batch:
         if d in failed:
-            continue  # not marked as fetched -> retried on the next request
+            continue
         ranked = rank_articles(
             results[d],
             company_names=[name],
@@ -288,10 +278,8 @@ def _ensure_macro(
     min_change_pct: float,
     refresh: bool,
 ) -> list[str]:
-    """Macro/political news ("hard" tier). One search per (day, scope), cached
-    across tickers: NVDA and AMD falling on the same Fed day share the result."""
     if news is None:
-        return []  # _ensure_news already warned that no provider is configured
+        return []
     moves, dates = _movement_days(db, company, start, end, min_change_pct)
     if moves.empty:
         return []

@@ -16,8 +16,6 @@ def make_engine(url: str):
         path = url.removeprefix("sqlite:///")
         if path and path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        # FastAPI runs sync endpoints in a threadpool; one Session per request
-        # keeps this safe.
         return create_engine(url, connect_args={"check_same_thread": False})
     return create_engine(url)
 
@@ -27,7 +25,7 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def init_db() -> None:
-    from app import models  # noqa: F401  (register tables)
+    from app import models  # noqa: F401
 
     Base.metadata.create_all(engine)
 

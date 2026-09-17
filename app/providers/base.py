@@ -1,11 +1,10 @@
-"""Shared provider plumbing: errors and a small retrying HTTP helper."""
 import time
 
 import httpx
 
 
 class ProviderError(Exception):
-    """An upstream dependency (prices, news, LLM) failed."""
+    pass
 
 
 class TickerNotFound(Exception):
@@ -24,7 +23,6 @@ def request_json(
     backoff: float = 0.8,
     **kwargs,
 ) -> dict:
-    """HTTP call with bounded retries on rate limits / transient failures."""
     last: Exception | None = None
     for attempt in range(attempts):
         try:

@@ -1,5 +1,3 @@
-"""Price + company-profile provider. yfinance is the only implementation, but
-everything downstream depends on the Protocol so it is swappable/testable."""
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Protocol
@@ -8,7 +6,6 @@ import pandas as pd
 
 from app.providers.base import ProviderError
 
-# Yahoo sectorKey -> SPDR sector ETF, used as the "industry" price benchmark.
 SECTOR_ETFS = {
     "technology": "XLK",
     "financial-services": "XLF",
@@ -41,7 +38,7 @@ class CompanyProfile:
     sector: str | None = None
     industry: str | None = None
     sector_etf: str | None = None
-    peers: list[dict] = field(default_factory=list)  # [{"symbol","name"}]
+    peers: list[dict] = field(default_factory=list)
 
 
 class PriceProvider(Protocol):
@@ -51,11 +48,6 @@ class PriceProvider(Protocol):
 
 
 def frame_to_bars(df: pd.DataFrame | None, symbols: list[str]) -> dict[str, list[Bar]]:
-    """Normalise a yf.download(group_by="ticker") frame into plain Bars.
-
-    Handles both the MultiIndex (ticker, field) layout and the flat layout some
-    yfinance versions return for a single symbol.
-    """
     out: dict[str, list[Bar]] = {s: [] for s in symbols}
     if df is None or df.empty:
         return out
@@ -83,8 +75,6 @@ def frame_to_bars(df: pd.DataFrame | None, symbols: list[str]) -> dict[str, list
 
 class YFinancePriceProvider:
     def get_profile(self, ticker: str, max_peers: int) -> CompanyProfile:
-        """Best effort: a profile failure degrades to 'no peers', it never
-        blocks price data (ticker validity is decided by price history)."""
         import yfinance as yf
 
         profile = CompanyProfile(ticker=ticker, name=ticker)
@@ -100,22 +90,20 @@ class YFinancePriceProvider:
         industry_key = info.get("industryKey")
         if industry_key:
             try:
-                top = yf.Industry(industry_key).top_companies  # index=symbol
+                top = yf.Industry(industry_key).top_companies
                 if top is not None and not top.empty:
                     if "market weight" in top.columns:
                         top = top.sort_values("market weight", ascending=False)
                     for symbol, row in top.iterrows():
                         if symbol and symbol != ticker and len(profile.peers) < max_peers:
-                            profile.peers.append({"symbol": symbol, "name": row.get("name") or symbol})
+                            name = row.get("name")
+                            profile.peers.append({"symbol": symbol, "name": name if isinstance(name, str) and name else symbol})
             except Exception:
                 pass
         return profile
 
     def get_history(self, symbols: list[str], start: date, end: date) -> dict[str, list[Bar]]:
         bars = self._download(symbols, start, end)
-        # yfinance swallows per-symbol failures (it only logs them), so a
-        # transient error looks exactly like a delisted ticker. Retry empties once
-        # so a blip on the primary ticker doesn't become a false 404.
         missing = [s for s in symbols if not bars[s]]
         if missing:
             bars.update(self._download(missing, start, end))
@@ -128,15 +116,13 @@ class YFinancePriceProvider:
             df = yf.download(
                 tickers=symbols,
                 start=start.isoformat(),
-                end=(end + timedelta(days=1)).isoformat(),  # yfinance end is exclusive
+                end=(end + timedelta(days=1)).isoformat(),
                 interval="1d",
-                auto_adjust=True,  # split/dividend adjusted -> no fake "movements"
+                auto_adjust=True,
                 group_by="ticker",
                 progress=False,
-                # Sequential: threaded downloads race on yfinance's SQLite tz cache
-                # ("database is locked") and silently drop symbols.
                 threads=False,
             )
-        except Exception as exc:  # yfinance raises a zoo of exception types
+        except Exception as exc:
             raise ProviderError(f"yfinance download failed: {exc}") from exc
         return frame_to_bars(df, symbols)

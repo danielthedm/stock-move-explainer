@@ -1,4 +1,3 @@
-"""Contract tests: request shape we send + response shape we parse, per vendor."""
 import json
 from datetime import date
 
@@ -108,10 +107,10 @@ def _yf_frame(symbols):
 
 def test_yfinance_frame_normalisation():
     bars = frame_to_bars(_yf_frame(["NVDA", "SPY"]), ["NVDA", "SPY", "MISSING"])
-    assert bars["MISSING"] == [] and len(bars["NVDA"]) == 1  # NaN close row dropped
+    assert bars["MISSING"] == [] and len(bars["NVDA"]) == 1
     b = bars["SPY"][0]
     assert (b.date, b.close, b.volume) == (date(2026, 3, 9), 1.5, 100)
-    flat = _yf_frame(["NVDA"]).droplevel(0, axis=1)  # some versions flatten single-symbol frames
+    flat = _yf_frame(["NVDA"]).droplevel(0, axis=1)
     assert len(frame_to_bars(flat, ["NVDA"])["NVDA"]) == 1
     assert frame_to_bars(pd.DataFrame(), ["NVDA"]) == {"NVDA": []}
 
@@ -133,7 +132,7 @@ def test_yfinance_provider_wiring(monkeypatch):
     class FakeIndustry:
         def __init__(self, key): assert key == "semiconductors"
         top_companies = pd.DataFrame(
-            {"name": ["NVIDIA", "Broadcom Inc.", "AMD Inc.", "Intel"], "rating": ["Buy"] * 4, "market weight": [0.4, 0.2, 0.1, 0.05]},
+            {"name": ["NVIDIA", "Broadcom Inc.", float("nan"), "Intel"], "rating": ["Buy"] * 4, "market weight": [0.4, 0.2, 0.1, 0.05]},
             index=pd.Index(["NVDA", "AVGO", "AMD", "INTC"], name="symbol"),
         )
 
@@ -144,23 +143,21 @@ def test_yfinance_provider_wiring(monkeypatch):
     p = YFinancePriceProvider()
     bars = p.get_history(["NVDA"], date(2026, 3, 9), date(2026, 3, 10))
     assert captured["end"] == "2026-03-11" and captured["auto_adjust"] is True and captured["group_by"] == "ticker"
-    assert captured["threads"] is False  # threaded downloads race on yfinance's tz cache
+    assert captured["threads"] is False
     assert len(bars["NVDA"]) == 1
 
     prof = p.get_profile("NVDA", max_peers=2)
     assert (prof.name, prof.sector_etf) == ("NVIDIA Corporation", "XLK")
-    assert prof.peers == [{"symbol": "AVGO", "name": "Broadcom Inc."}, {"symbol": "AMD", "name": "AMD Inc."}]
+    assert prof.peers == [{"symbol": "AVGO", "name": "Broadcom Inc."}, {"symbol": "AMD", "name": "AMD"}]
 
     class Broken:
         def __init__(self, t): raise RuntimeError("yahoo down")
 
     monkeypatch.setattr(yf, "Ticker", Broken)
-    assert p.get_profile("NVDA", 2).name == "NVDA"  # degrades, never raises
+    assert p.get_profile("NVDA", 2).name == "NVDA"
 
 
 def test_yfinance_retries_silently_dropped_symbols(monkeypatch):
-    """Live yfinance logs per-symbol failures ("database is locked") and returns
-    no rows for them; one retry keeps that from looking like an unknown ticker."""
     import yfinance as yf
 
     calls = []

@@ -1,8 +1,3 @@
-"""Turn noisy search results into a short, relevant, de-duplicated list.
-
-Deliberately heuristic (no LLM): deterministic, free, fast, unit-testable.
-An article must mention the company, a peer, or the industry to survive.
-"""
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -19,11 +14,21 @@ _CATALYSTS = re.compile(
     r"\b(earnings|revenue|guidance|forecast|outlook|profit|results|beats?|miss(es|ed)?|"
     r"upgrad\w*|downgrad\w*|price target|analyst|lawsuit|sue[sd]?|settle\w*|probe|investigat\w*|"
     r"sec|ftc|doj|antitrust|recall|launch\w*|unveil\w*|acqui\w*|merger|deal|layoffs?|ceo|resign\w*|"
-    r"tariffs?|export|ban|shares|stock|surg\w*|soar\w*|plung\w*|tumbl\w*|slump\w*|rall(y|ies|ied))\b",
+    r"tariffs?|export|ban)\b",
+    re.IGNORECASE,
+)
+_PRICE = re.compile(r"\b(shares?|stocks?)\b", re.IGNORECASE)
+_DIRECTION = re.compile(
+    r"\b(drop\w*|f[ae]ll\w*|s[ia]nk\w*|plung\w*|tumbl\w*|slid\w*|slump\w*|div(e|es|ing)|lower|down|crash\w*|"
+    r"surg\w*|jump\w*|soar\w*|rall(y|ies|ied)|ris(e|es|ing)|rose|higher|up|climb\w*|gain\w*|pop\w*|rebound\w*)\b",
     re.IGNORECASE,
 )
 
-# Ordered: the first group that matches names the topic ("trade war" is trade, not war).
+
+def _describes_price_reaction(title: str) -> bool:
+    return bool(_PRICE.search(title) and _DIRECTION.search(title))
+
+
 _MACRO_TOPICS = [
     ("monetary_policy", r"fed|federal reserve|fomc|powell|rate (cut|hike|decision|increase)s?|interest rates?|"
                         r"central banks?|ecb|bank of (england|japan)|(treasury|bond) yields?"),
@@ -43,8 +48,6 @@ _MARKET_WORDS = re.compile(
 
 
 def macro_topic(title: str, snippet: str | None = None) -> str | None:
-    """'rate decisions, regulation, geopolitics': tag an article with the macro or
-    political theme it is about, title first. None = not a macro story."""
     for text in (title, snippet or ""):
         for topic, pattern in _MACRO_TOPICS:
             if pattern.search(text):
@@ -57,7 +60,6 @@ def url_key(url: str) -> str:
 
 
 def short_name(name: str) -> str:
-    """'NVIDIA Corporation' -> 'NVIDIA', 'Amazon.com, Inc.' -> 'Amazon'."""
     out = re.sub(r"^the\s+", "", name.strip(), flags=re.IGNORECASE)
     while True:
         stripped = _SUFFIXES.sub("", out).strip(" ,")
@@ -72,7 +74,6 @@ def _mentions(text: str, names: list[str], tickers: list[str]) -> bool:
         if n and re.search(rf"(?<!\w){re.escape(n)}(?!\w)", text, re.IGNORECASE):
             return True
     for t in tickers:
-        # Tickers are case-sensitive whole words; 1-letter tickers are too ambiguous.
         if len(t) >= 2 and re.search(rf"(?<![\w.]){re.escape(t)}(?![\w])", text):
             return True
     return False
@@ -81,7 +82,7 @@ def _mentions(text: str, names: list[str], tickers: list[str]) -> bool:
 @dataclass
 class RankedArticle:
     raw: RawArticle
-    category: str  # company | industry
+    category: str
     relevance: float
 
 
@@ -90,10 +91,6 @@ def _norm_title(title: str) -> str:
 
 
 def balanced_top(articles: list, n: int) -> list:
-    """Top `n` of a relevance-sorted list, alternating categories while both have
-    articles left. Company articles outscore industry ones by construction (on
-    live data nearly all land at 0.95 vs <= 0.80), so a plain [:n] silently drops
-    every competitor/industry article whenever n is small."""
     queues: dict[str, list] = {}
     for a in articles:
         queues.setdefault(a.category, []).append(a)
@@ -106,7 +103,6 @@ def balanced_top(articles: list, n: int) -> list:
 
 
 def _is_duplicate(a: RawArticle, seen_urls: set[str], seen_titles: set[str]) -> bool:
-    """Syndicated copies: same URL (ignoring query string) or same normalised title."""
     u, t = url_key(a.url), _norm_title(a.title)
     if u in seen_urls or t in seen_titles:
         return True
@@ -120,18 +116,15 @@ def _timing_bonus(a: RawArticle, move_date: date, prev_trading_date: date) -> fl
         return 0.0
     pub = a.published_at.date()
     if prev_trading_date <= pub <= move_date:
-        return 0.20  # could have caused the move
+        return 0.20
     if pub == move_date + timedelta(days=1):
-        return 0.10  # next-day recap ("shares fell yesterday after...")
+        return 0.10
     return 0.0
 
 
 def rank_macro(
     articles: list[RawArticle], *, move_date: date, prev_trading_date: date, limit: int
 ) -> list[tuple[RawArticle, str, float]]:
-    """Macro/political results as (article, topic, relevance). Unlike company news
-    there is no entity to match, so the gate is macro vocabulary: a story must be
-    about rates, the economy, trade, geopolitics or regulation to survive."""
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
     ranked = []
@@ -141,10 +134,10 @@ def rank_macro(
         topic = macro_topic(a.title, a.snippet)
         if topic is None:
             continue
-        score = 0.45 if macro_topic(a.title) else 0.25  # headline story vs passing mention in the snippet
+        score = 0.45 if macro_topic(a.title) else 0.25
         score += _timing_bonus(a, move_date, prev_trading_date)
         if _MARKET_WORDS.search(a.title):
-            score += 0.15  # ties the event to a market reaction
+            score += 0.15
         ranked.append((a, topic, round(min(score, 1.0), 3)))
     ranked.sort(key=lambda r: r[2], reverse=True)
     return ranked[:limit]
@@ -179,11 +172,13 @@ def rank_articles(
         elif _mentions(body, industry_names, industry_tickers):
             category, score = "industry", 0.25
         else:
-            continue  # irrelevant to this company and its industry
+            continue
 
         score += _timing_bonus(a, move_date, prev_trading_date)
         if _CATALYSTS.search(title):
-            score += 0.15
+            score += 0.10
+        if _describes_price_reaction(title):
+            score += 0.10
         ranked.append(RankedArticle(raw=a, category=category, relevance=round(min(score, 1.0), 3)))
 
     ranked.sort(key=lambda r: r.relevance, reverse=True)

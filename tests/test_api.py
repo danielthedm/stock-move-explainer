@@ -1,4 +1,3 @@
-"""End-to-end through HTTP -> ingest -> SQL -> analysis, with fake upstreams."""
 from datetime import date
 
 from tests.fakes import FakeNewsProvider
@@ -20,11 +19,9 @@ def test_full_report(ctx):
     assert list(moves) == ["2026-03-10", "2026-04-15", "2026-05-05", "2026-05-20"]
     assert body["movement_count"] == 4 and body["warnings"] == []
 
-    # prices: only the requested window, first day still has pct_change (lookback buffer worked)
     assert body["prices"][0]["date"] == "2026-03-02" and body["prices"][0]["pct_change"] is not None
     assert body["prices"][-1]["date"] == "2026-05-29"
 
-    # company-specific: earnings the night before is found, deduped, junk dropped
     m = moves["2026-03-10"]
     assert m["pct_change"] == 6.0 and m["direction"] == "up" and m["zscore"] > 5
     assert m["context"]["driver"] == "company_specific" and m["news_status"] == "fetched"
@@ -32,7 +29,6 @@ def test_full_report(ctx):
     assert titles[0].startswith("NVIDIA beats earnings") and len(titles) == 2
     assert all(a["category"] == "company" for a in m["articles"])
 
-    # industry-wide: peers + sector fell, industry articles attached
     m = moves["2026-04-15"]
     assert m["context"]["driver"] == "industry_wide"
     assert m["context"]["sector_pct_change"] == -2.1 and m["context"]["peer_median_pct_change"] == -4.0
@@ -43,14 +39,13 @@ def test_full_report(ctx):
     assert moves["2026-05-05"]["context"]["driver"] == "market_wide"
     assert moves["2026-05-20"]["articles"] == [] and moves["2026-05-20"]["news_status"] == "fetched"
 
-    # two searches (company + industry) per movement day, windowed prev-trading-day .. day+1
     assert len(ctx.news.queries) == 8
     q = next(q for q in ctx.news.queries if q.end == date(2026, 3, 11))
     assert q.start == date(2026, 3, 9)
 
 
 def test_monday_move_searches_back_over_the_weekend(ctx):
-    ctx.client.get("/v1/stocks/NVDA/movements/2026-03-09")  # a Monday
+    ctx.client.get("/v1/stocks/NVDA/movements/2026-03-09")
     assert {q.start for q in ctx.news.queries} == {date(2026, 3, 6)}
 
 
@@ -75,13 +70,10 @@ def test_second_call_is_served_from_cache(ctx):
     second = _get(ctx)
     assert (len(ctx.prices.history_calls), ctx.prices.profile_calls, len(ctx.news.queries)) == calls
     assert first == second
-    # narrower window: still cached
     _get(ctx, start="2026-04-01", end="2026-04-30")
     assert len(ctx.prices.history_calls) == calls[0]
-    # wider window: one incremental fetch, already-enriched days are not searched again
     ctx.client.get("/v1/stocks/NVDA", params={"start": "2026-01-01", "end": "2026-05-31"})
     assert len(ctx.prices.history_calls) == calls[0] + 1
-    # refresh forces upstream
     _get(ctx, refresh="true")
     assert len(ctx.news.queries) == calls[2] + 8
 
@@ -89,7 +81,7 @@ def test_second_call_is_served_from_cache(ctx):
 def test_lower_threshold_later_enriches_only_new_days(ctx):
     _get(ctx, min_change_pct=4)
     assert len(ctx.news.queries) == 4
-    _get(ctx)  # default 2% -> two more movement days
+    _get(ctx)
     assert len(ctx.news.queries) == 8
 
 
@@ -102,7 +94,7 @@ def test_news_quota_cap_prioritises_largest_moves(ctx):
     status = {m["date"]: m["news_status"] for m in body["movements"]}
     assert status == {"2026-03-10": "fetched", "2026-04-15": "fetched", "2026-05-05": "not_fetched", "2026-05-20": "not_fetched"}
     assert "2 smaller movement day(s)" in body["warnings"][0]
-    assert all(s == "fetched" for s in (m["news_status"] for m in _get(ctx)["movements"]))  # second call continues
+    assert all(s == "fetched" for s in (m["news_status"] for m in _get(ctx)["movements"]))
 
 
 def test_news_outage_degrades_and_retries(ctx):
@@ -116,7 +108,7 @@ def test_news_outage_degrades_and_retries(ctx):
     assert moves["2026-03-10"]["news_status"] == "not_fetched" and moves["2026-04-15"]["news_status"] == "fetched"
     assert any("2026-03-10" in w for w in body["warnings"])
     app.dependency_overrides[deps.get_news_provider] = lambda: ctx.news
-    assert {m["news_status"] for m in _get(ctx)["movements"]} == {"fetched"}  # healed on next request
+    assert {m["news_status"] for m in _get(ctx)["movements"]} == {"fetched"}
 
 
 def test_no_news_provider_still_serves_prices(ctx):
@@ -130,7 +122,7 @@ def test_no_news_provider_still_serves_prices(ctx):
 
 def test_validation_and_errors(ctx):
     assert ctx.client.get("/v1/stocks/ZZZZ", params=RANGE).status_code == 404
-    assert ctx.client.get("/v1/stocks/NVDA", params=RANGE).status_code == 200  # a 404 must not poison later requests
+    assert ctx.client.get("/v1/stocks/NVDA", params=RANGE).status_code == 200
     assert ctx.client.get("/v1/stocks/NV$DA").status_code == 422
     assert ctx.client.get("/v1/stocks/NVDA", params={"start": "2026-05-01", "end": "2026-04-01"}).status_code == 422
     assert ctx.client.get("/v1/stocks/NVDA", params={"start": "2020-01-01", "end": "2026-04-01"}).status_code == 422
@@ -158,11 +150,11 @@ def test_chat_llm_mode(ctx):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["mode"] == "llm" and body["movements_considered"] == 4
-    assert [s["ref"] for s in body["sources"]] == [1, 2]  # only the cited ones
+    assert [s["ref"] for s in body["sources"]] == [1, 2]
     assert body["sources"][0]["url"] == "https://example.com/nvda-earnings"
 
     system, messages = ctx.llm.calls[0]
-    assert "ONLY" in system and messages[0] == {"role": "user", "content": "hi"}  # leading assistant turn dropped
+    assert "ONLY" in system and messages[0] == {"role": "user", "content": "hi"}
     prompt = messages[-1]["content"]
     assert "Question: Why did it jump in March?" in prompt
     assert "## 2026-03-10: NVDA +6.00%" in prompt and "price-based driver: company_specific" in prompt
@@ -200,11 +192,8 @@ def test_explain_movement_is_cached(ctx):
     assert body["movement"]["pct_change"] == 6.0 and len(body["movement"]["articles"]) == 2
     again = ctx.client.get("/v1/stocks/NVDA/movements/2026-03-10").json()
     assert again["cached"] is True and len(ctx.llm.calls) == 1
-    assert ctx.client.get("/v1/stocks/NVDA/movements/2026-03-08").status_code == 404  # Sunday
+    assert ctx.client.get("/v1/stocks/NVDA/movements/2026-03-08").status_code == 404
     assert ctx.client.get("/v1/stocks/NVDA/movements/2999-01-01").status_code == 422
-
-
-# --- API versioning + v2 macro/political tier -------------------------------------------------
 
 
 def _get_v2(ctx, path="", **params):
@@ -222,7 +211,6 @@ def test_movements_collection_matches_the_report(ctx):
         assert set(body) == {"ticker", "start", "end", "filters", "movement_count", "movements", "warnings"}
         assert body["filters"]["direction"] == "down" and body["filters"]["min_change_pct"] == 2.0
         assert body["movements"] == [m for m in report["movements"] if m["direction"] == "down"]
-    # include_prices belongs to the report only; unknown tickers 404 on the collection too
     assert ctx.client.get("/v1/stocks/ZZZZ/movements", params=RANGE).status_code == 404
 
 
@@ -235,21 +223,17 @@ def test_unversioned_paths_are_gone_and_health_lists_versions(ctx):
 def test_v2_adds_macro_news_by_price_driver(ctx):
     moves = {m["date"]: m for m in _get_v2(ctx)["movements"]}
 
-    # market-wide day -> market-scope macro search finds the Fed decision
     m = moves["2026-05-05"]
     assert m["context"]["driver"] == "market_wide" and m["macro_status"] == "fetched"
     macro = [a for a in m["articles"] if a["category"] == "macro"]
     assert [a["title"][:14] for a in macro] == ["Fed holds rate"] and macro[0]["macro_topic"] == "monetary_policy"
-    assert macro[0]["relevance"] == 0.8  # 0.45 headline + 0.20 timing + 0.15 market reaction
+    assert macro[0]["relevance"] == 0.8
 
-    # industry-wide day: the export-curbs stories were already found by the industry search, so they
-    # keep the more specific label (no duplicates) but carry the macro topic
     m = moves["2026-04-15"]
     assert m["macro_status"] == "fetched" and {a["category"] for a in m["articles"]} == {"industry"}
     assert {a["macro_topic"] for a in m["articles"]} == {"trade"}
     assert len({a["url"] for a in m["articles"]}) == len(m["articles"])
 
-    # company-specific days get no macro search at all
     assert moves["2026-03-10"]["macro_status"] == "not_applicable"
     assert all(a["macro_topic"] is None for a in moves["2026-03-10"]["articles"])
     macro_queries = [q for q in ctx.news.queries if "Federal Reserve" in q.text or "Government policy" in q.text]
@@ -257,16 +241,15 @@ def test_v2_adds_macro_news_by_price_driver(ctx):
     industry_q = next(q for q in macro_queries if "Government policy" in q.text)
     assert "Semiconductors industry" in industry_q.text and industry_q.start == date(2026, 4, 14)
 
-    # the new filter value
     only = _get_v2(ctx, news_category="macro")
     assert [a["category"] for m in only["movements"] for a in m["articles"]] == ["macro"]
-    assert len(ctx.news.queries) == 10  # served from cache
+    assert len(ctx.news.queries) == 10
 
 
 def test_v1_contract_is_frozen(ctx):
-    _get_v2(ctx)  # macro articles now exist in the DB...
+    _get_v2(ctx)
     body = ctx.client.get("/v1/stocks/NVDA", params=RANGE).json()
-    for m in body["movements"]:  # ...but v1 never shows them, nor the v2-only fields
+    for m in body["movements"]:
         assert "macro_status" not in m
         assert all(a["category"] in ("company", "industry") and "macro_topic" not in a for a in m["articles"])
     assert ctx.client.get("/v1/stocks/NVDA", params={**RANGE, "news_category": "macro"}).status_code == 422
@@ -291,7 +274,7 @@ def test_macro_news_is_shared_across_tickers_by_scope(ctx):
         assert amd["2026-05-05"]["macro_status"] == "fetched"
         assert any(a["category"] == "macro" for a in amd["2026-05-05"]["articles"])
         new = ctx.news.queries[before:]
-        assert not [q for q in new if "Federal Reserve" in q.text or "Government policy" in q.text]  # reused
+        assert not [q for q in new if "Federal Reserve" in q.text or "Government policy" in q.text]
         with ctx.Session() as db:
             assert len(db.scalars(select(MacroFetch)).all()) == 2
     finally:
@@ -305,7 +288,6 @@ def test_v2_chat_and_explanation_use_macro_evidence(ctx):
     assert "[macro]" in system
     assert "[macro] (2026-05-05, example.com) Fed holds rates" in messages[-1]["content"]
 
-    # v1 and v2 explanations are cached separately: they saw different evidence
     assert ctx.client.get("/v1/stocks/NVDA/movements/2026-05-05").json()["cached"] is False
     assert ctx.client.get("/v2/stocks/NVDA/movements/2026-05-05").json()["cached"] is False
     assert ctx.client.get("/v2/stocks/NVDA/movements/2026-05-05").json()["cached"] is True

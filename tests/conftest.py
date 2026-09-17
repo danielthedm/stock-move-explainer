@@ -1,6 +1,6 @@
 import os
 
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"  # must be set before app import
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 for key in ("EXA_API_KEY", "NEWSAPI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     os.environ.pop(key, None)
 
@@ -18,7 +18,6 @@ from tests.fakes import FakeLLM, FakeNewsProvider, FakePriceProvider
 
 @pytest.fixture
 def ctx():
-    """Real app + real SQL (fresh in-memory DB) + fake upstream providers."""
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     from app import models  # noqa: F401
 

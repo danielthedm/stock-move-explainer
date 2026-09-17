@@ -1,19 +1,13 @@
-"""Pure functions: what counts as a movement and what moved with it."""
 from statistics import median
 
 import pandas as pd
 
-ZSCORE_WINDOW = 30  # trading days of trailing volatility
-CO_MOVE_PCT = 1.0  # a benchmark "moved with" the stock if >= 1% the same way
+ZSCORE_WINDOW = 30
+CO_MOVE_PCT = 1.0
+CO_MOVE_SHARE = 0.4
 
 
 def compute_metrics(bars: list) -> pd.DataFrame:
-    """bars: objects with .date/.open/.high/.low/.close/.volume, any order.
-
-    Returns a frame indexed by date with pct_change and zscore.
-    zscore = today's return / stdev of the *previous* 30 returns, so a 2% day
-    means something different for a utility than for a meme stock.
-    """
     if not bars:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "prev_close", "pct_change", "zscore"])
     df = pd.DataFrame(
@@ -34,15 +28,10 @@ def compute_metrics(bars: list) -> pd.DataFrame:
 
 
 def _co_moved(ref: float | None, pct: float) -> bool:
-    return ref is not None and ref * pct > 0 and abs(ref) >= CO_MOVE_PCT
+    return ref is not None and ref * pct > 0 and abs(ref) >= max(CO_MOVE_PCT, CO_MOVE_SHARE * abs(pct))
 
 
 def macro_scope(driver: str, industry: str | None, sector: str | None) -> str | None:
-    """Which macro/political news search a move calls for. The price-based driver
-    already says whether the day was bigger than the company: market-wide days get
-    the market-level search (rates, inflation, geopolitics), industry-wide days an
-    industry-level one (regulation, export controls, tariffs). Company-specific
-    days get none, which also keeps news-API quota for the days that need it."""
     if driver == "market_wide":
         return "market"
     if driver == "industry_wide" and (industry or sector):
@@ -51,9 +40,6 @@ def macro_scope(driver: str, industry: str | None, sector: str | None) -> str | 
 
 
 def classify_driver(pct: float, market: float | None, sector: float | None, peers: list[float]) -> str:
-    """Cheap, explainable attribution from prices alone. It tells the reader
-    (and the LLM) which *kind* of news to weight: a stock that fell 3% while
-    its sector fell 3% rarely has a company-specific story."""
     if _co_moved(market, pct):
         return "market_wide"
     peer_median = median(peers) if peers else None

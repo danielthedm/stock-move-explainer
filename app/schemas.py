@@ -34,15 +34,13 @@ class PeerMove(BaseModel):
 
 
 class MarketContext(BaseModel):
-    """What else moved that day - the price-side evidence for attribution."""
-
     market_symbol: str
     market_pct_change: float | None
     sector_etf: str | None
     sector_pct_change: float | None
     peers: list[PeerMove]
     peer_median_pct_change: float | None
-    excess_vs_sector_pct: float | None  # percentage points: stock pct_change - sector pct_change
+    excess_vs_sector_pct: float | None
     driver: Literal["company_specific", "industry_wide", "market_wide"]
 
 
@@ -54,8 +52,6 @@ class ArticleOut(BaseModel):
     published_at: datetime | None
     snippet: str | None
     relevance: float
-    # Macro/political theme, for any category: an [industry] story about export
-    # controls is tagged "trade". None = not a macro story.
     macro_topic: Literal["monetary_policy", "economy", "trade", "geopolitics", "regulation"] | None = None
 
 
@@ -68,14 +64,11 @@ class MovementOut(BaseModel):
     zscore: float | None
     context: MarketContext
     news_status: Literal["fetched", "not_fetched"]
-    # not_applicable: a company-specific move, so no macro search is made for it.
     macro_status: Literal["fetched", "not_fetched", "not_applicable"] = "not_applicable"
     articles: list[ArticleOut]
 
 
 class MovementQuery(BaseModel):
-    """Query parameters shared by every endpoint that lists movements."""
-
     start: date | None = Field(None, description="Default: end - 90 days")
     end: date | None = Field(None, description="Default: today")
     min_change_pct: float | None = Field(
@@ -96,8 +89,6 @@ class ReportQuery(MovementQuery):
 
 
 class FiltersOut(BaseModel):
-    """The filters as applied (defaults resolved), echoed back to the caller."""
-
     min_change_pct: float
     min_zscore: float | None
     direction: Literal["any", "up", "down"]
@@ -144,7 +135,6 @@ class ChatTurn(BaseModel):
 class ChatRequest(BaseModel):
     ticker: str = Field(examples=["NVDA"])
     message: str = Field(min_length=1, max_length=4000, examples=["Why did the stock drop in April?"])
-    # Stateless API: the client owns the transcript and sends prior turns back.
     history: list[ChatTurn] = Field(default_factory=list, max_length=20)
     start: date | None = None
     end: date | None = None

@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     default_lookback_days: int = 90
     max_range_days: int = 730
     default_min_change_pct: float = 2.0
-    # Quota guard: how many (largest-first) movement days get news per request.
     max_news_movements: int = 12
     articles_per_category: int = 5
     news_concurrency: int = 4

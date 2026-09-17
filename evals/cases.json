@@ -1,0 +1,42 @@
+[
+  {"id": "nvda-deepseek", "ticker": "NVDA", "date": "2025-01-27", "tier": ["company", "industry"],
+   "cause": "DeepSeek's cheap AI model triggered a sell-off across AI chip stocks (NVDA -17%)",
+   "keywords": ["deepseek"], "drivers": ["industry_wide", "market_wide"]},
+
+  {"id": "nvda-liberation-day", "ticker": "NVDA", "date": "2025-04-03", "tier": "macro",
+   "cause": "'Liberation Day' reciprocal tariffs announced after the close on Apr 2",
+   "keywords": ["tariff"], "drivers": ["market_wide"]},
+
+  {"id": "aapl-liberation-day", "ticker": "AAPL", "date": "2025-04-03", "tier": "macro",
+   "cause": "Same tariff shock; Apple among the most exposed via its Asian supply chain (-9%)",
+   "keywords": ["tariff"], "drivers": ["market_wide"]},
+
+  {"id": "nvda-tariff-pause", "ticker": "NVDA", "date": "2025-04-09", "tier": "macro",
+   "cause": "90-day pause on most reciprocal tariffs; one of the largest market rallies on record",
+   "keywords": ["tariff", "pause"], "drivers": ["market_wide"]},
+
+  {"id": "nvda-h20-export", "ticker": "NVDA", "date": "2025-04-16", "tier": "macro",
+   "cause": "New US licence requirement for H20 chip exports to China; $5.5B charge disclosed Apr 15",
+   "keywords": ["h20", "export"], "drivers": ["industry_wide", "company_specific"]},
+
+  {"id": "unh-guidance-cut", "ticker": "UNH", "date": "2025-04-17", "tier": "company",
+   "cause": "UnitedHealth cut its full-year profit forecast on higher medical costs (-22%)",
+   "keywords": ["forecast", "guidance", "outlook", "medical costs"], "drivers": ["company_specific"]},
+
+  {"id": "tsla-musk-trump", "ticker": "TSLA", "date": "2025-06-05", "tier": "company",
+   "cause": "Public feud between Elon Musk and President Trump (-14%)",
+   "keywords": ["trump"], "drivers": ["company_specific"]},
+
+  {"id": "meta-capex", "ticker": "META", "date": "2025-10-30", "tier": "company",
+   "cause": "Q3 results: investors balked at sharply higher AI capital spending plans (-11%)",
+   "keywords": ["spending", "capex", "capital expenditure"], "drivers": ["company_specific"]},
+
+  {"id": "nvda-fed-hawkish-hold", "ticker": "NVDA", "date": "2026-07-29", "tier": "macro",
+   "cause": "Fed 'hawkish hold' with dissents; rate-sensitive growth stocks sold off",
+   "keywords": ["fed ", "fed's", "federal reserve", "interest rate"], "drivers": ["market_wide"]},
+
+  {"id": "nvda-q2-fy27-earnings", "ticker": "NVDA", "date": "2026-08-27", "tier": "company",
+   "cause": "Blowout Q2 FY2027 results and a 70% growth forecast (+8.7%)",
+   "keywords": ["earnings", "results", "forecast", "guidance"], "drivers": ["company_specific"],
+   "note": "NVDA is a large XLK weight, so XLK co-moves by construction; the share-of-move rule handles it."}
+]

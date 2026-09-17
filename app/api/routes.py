@@ -1,9 +1,3 @@
-"""Versioned HTTP layer.
-
-One router factory, one copy of every endpoint. An `ApiVersion` says which
-contract (request/response models) a version speaks and whether it includes the
-macro/political news tier, so v1 stays frozen while v2 evolves.
-"""
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -32,7 +26,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 @dataclass(frozen=True)
 class ApiVersion:
     name: str
-    macro: bool  # include the macro/political news tier
+    macro: bool
     movement_query: type[BaseModel]
     report_query: type[BaseModel]
     report: type[BaseModel]
@@ -84,7 +78,6 @@ def _threshold(settings: Settings, min_change_pct: float | None) -> float:
 
 
 def _load(db, settings, prices, news, ticker, start, end, min_change_pct, *, macro, refresh=False, **filters):
-    """The path every endpoint shares: ingest what is missing, then query it."""
     try:
         company, warnings = ensure_data(db, settings, prices, news, ticker, start, end, min_change_pct, refresh, macro)
     except TickerNotFound:
@@ -102,7 +95,6 @@ def make_router(v: ApiVersion) -> APIRouter:
     router = APIRouter(prefix=f"/{v.name}", tags=[v.name])
 
     def _movements(db, settings, prices, news, ticker: str, q):
-        """Shared by the report and the movements collection: same query, same filters."""
         ticker = _ticker(ticker)
         start, end = _window(settings, q.start, q.end)
         filters = schemas.FiltersOut(
@@ -123,9 +115,7 @@ def make_router(v: ApiVersion) -> APIRouter:
         prices=Depends(deps.get_price_provider),
         news=Depends(deps.get_news_provider),
     ):
-        """All stock + news data for a ticker in one call: company, movements with
-        their news and market context, and the price series. First call for a
-        (ticker, range) ingests from upstream; later calls are served from the local DB."""
+        """All stock and news data for a ticker: company, movements with news and market context, prices."""
         company, warnings, metrics, movements, filters, start, end = _movements(db, settings, prices, news, ticker, q)
         return schemas.StockReport(
             company=company_out(company),
@@ -147,8 +137,7 @@ def make_router(v: ApiVersion) -> APIRouter:
         prices=Depends(deps.get_price_provider),
         news=Depends(deps.get_news_provider),
     ):
-        """The movements collection: just the major moves (with news and market
-        context), without the company profile or price series."""
+        """The ticker's major moves, with news and market context."""
         company, warnings, _, movements, filters, start, end = _movements(db, settings, prices, news, ticker, q)
         return schemas.MovementList(
             ticker=company.ticker, start=start, end=end, filters=filters,
@@ -170,7 +159,6 @@ def make_router(v: ApiVersion) -> APIRouter:
         ticker = _ticker(ticker)
         if move_date > date.today():
             raise HTTPException(422, "move_date is in the future")
-        # min_change_pct=0 -> any trading day can be explained, not just >= 2% days.
         company, _, _, movements = _load(
             db, settings, prices, news, ticker, move_date, move_date, 0.0, macro=v.macro, refresh=refresh
         )
@@ -208,8 +196,7 @@ def make_router(v: ApiVersion) -> APIRouter:
         news=Depends(deps.get_news_provider),
         llm=Depends(deps.get_llm),
     ):
-        """Ask questions about a ticker's movements. Stateless: send prior turns in
-        `history`. Narrow `start`/`end` to focus on a period."""
+        """Ask questions about a ticker's movements. Stateless: send prior turns in `history`."""
         ticker = _ticker(req.ticker)
         start, end = _window(settings, req.start, req.end)
         threshold = _threshold(settings, req.min_change_pct)

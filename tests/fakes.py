@@ -1,5 +1,3 @@
-"""Deterministic in-memory providers. Used by the test-suite and by
-scripts/offline_demo.py (run the real API with zero API keys / network)."""
 import hashlib
 from datetime import date, datetime, timedelta
 
@@ -15,11 +13,7 @@ PROFILES = {
     ),
 }
 
-# symbol -> {date: forced % move}. Everything else is small seeded noise.
 SHOCKS = {
-    # 2026-03-10: company-specific pop (peers/sector/market flat)
-    # 2026-04-15: industry-wide sell-off (peers + XLK down, SPY mildly down)
-    # 2026-05-05: market-wide drop
     "NVDA": {date(2026, 3, 10): 6.0, date(2026, 4, 15): -5.0, date(2026, 5, 5): -3.0, date(2026, 5, 20): 2.4},
     "AMD": {date(2026, 4, 15): -4.2, date(2026, 5, 5): -2.5},
     "AVGO": {date(2026, 4, 15): -3.8, date(2026, 5, 5): -2.2},
@@ -28,7 +22,6 @@ SHOCKS = {
 }
 
 NEWS = [
-    # (published, title, url, snippet)
     (datetime(2026, 3, 9, 21, 30), "NVIDIA beats earnings expectations and raises guidance on data-center demand",
      "https://example.com/nvda-earnings", "NVIDIA reported record quarterly revenue after the bell on Monday."),
     (datetime(2026, 3, 10, 9, 0), "Nvidia beats earnings expectations and raises guidance on data center demand",
@@ -57,7 +50,7 @@ def business_days(start: date, end: date):
 
 def _noise(symbol: str, d: date) -> float:
     h = int(hashlib.sha256(f"{symbol}{d}".encode()).hexdigest()[:8], 16)
-    return (h / 0xFFFFFFFF - 0.5) * 1.2  # +/-0.6%
+    return (h / 0xFFFFFFFF - 0.5) * 1.2
 
 
 class FakePriceProvider:
@@ -76,7 +69,6 @@ class FakePriceProvider:
         for symbol in symbols:
             bars, close = [], 100.0
             if symbol in known:
-                # Walk from a fixed epoch so closes are identical across ranges.
                 for d in business_days(EPOCH, end):
                     pct = SHOCKS.get(symbol, {}).get(d, _noise(symbol, d))
                     prev, close = close, close * (1 + pct / 100)

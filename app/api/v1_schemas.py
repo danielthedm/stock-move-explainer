@@ -1,11 +1,3 @@
-"""The v1 contract, frozen.
-
-`app/schemas.py` always describes the *current* API (v2) and is what the services
-produce. These are the v1 shapes: no macro article category, no `macro_status`, no
-`macro_topic`. They are written out rather than derived from the current models
-on purpose, so that evolving v2 can never silently change what v1 clients receive.
-FastAPI serialises the services' output through them, dropping the v2-only fields.
-"""
 from datetime import date, datetime
 from typing import Literal
 

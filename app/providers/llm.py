@@ -1,12 +1,10 @@
-"""Minimal chat-completion clients. Plain HTTP keeps the dependency surface
-small and makes both vendors the same ~20 lines behind one Protocol."""
 from typing import Protocol
 
 import httpx
 
 from app.providers.base import request_json
 
-Message = dict  # {"role": "user" | "assistant", "content": str}
+Message = dict
 
 
 class LLMProvider(Protocol):
@@ -44,7 +42,7 @@ class OpenAILLM:
     def complete(self, system: str, messages: list[Message], max_tokens: int = 900) -> str:
         body = {
             "model": self.model,
-            "max_completion_tokens": max_tokens,  # accepted by all current chat models
+            "max_completion_tokens": max_tokens,
             "messages": [{"role": "system", "content": system}, *messages],
         }
         data = request_json(self._client, "POST", self.URL, headers=self._headers, json=body)

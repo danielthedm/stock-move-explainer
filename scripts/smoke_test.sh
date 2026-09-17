@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Live smoke test against a running server (real yfinance / news / LLM).
-#   uvicorn app.main:app --port 8000 &   then   ./scripts/smoke_test.sh [TICKER] [BASE_URL]
 set -euo pipefail
 T="${1:-NVDA}"; BASE="${2:-http://127.0.0.1:8000}"; V2="$BASE/v2"; V1="$BASE/v1"
-# sed (not head) so the whole response is consumed: head closes the pipe early
-# and, under pipefail, a long real response kills the script with SIGPIPE.
 pp() { python3 -m json.tool | sed -n "1,${1:-40}p"; }
 
 echo "== health";                curl -fsS "$BASE/health" | pp

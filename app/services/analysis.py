@@ -1,4 +1,3 @@
-"""Read side: derive movements + market context + articles from stored facts."""
 from datetime import date, timedelta
 from statistics import median
 
@@ -12,7 +11,6 @@ from app.schemas import ArticleOut, CompanyOut, MarketContext, MovementOut, Peer
 from app.services.movements import classify_driver, compute_metrics, macro_scope
 from app.services.ranking import balanced_top, macro_topic, url_key
 
-# Trailing history needed before `start` so the first day has a z-score.
 LOOKBACK_BUFFER_DAYS = 70
 
 
@@ -63,7 +61,7 @@ def price_points(df: pd.DataFrame, start: date) -> list[PricePoint]:
             low=_r(row["low"], 4),
             close=_r(row["close"], 4),
             volume=int(row["volume"]),
-            pct_change=_r(row["pct_change"])  # not row.pct_change: that is a Series method,
+            pct_change=_r(row["pct_change"])
         )
         for d, row in df[df.index >= start].iterrows()
     ]
@@ -72,10 +70,6 @@ def price_points(df: pd.DataFrame, start: date) -> list[PricePoint]:
 def market_context(
     metrics: dict[str, pd.DataFrame], company: Company, settings: Settings, d: date, pct: float
 ) -> MarketContext:
-    """What the market, the sector ETF and the peers did on `d`, and the driver
-    label that follows. Used on read and by ingest (to decide which days need a
-    macro search)."""
-
     def pct_on(symbol: str | None) -> float | None:
         frame = metrics.get(symbol) if symbol else None
         if frame is None or d not in frame.index:
@@ -115,8 +109,6 @@ def build_movements(
     max_articles: int = 10,
     include_macro: bool = False,
 ) -> list[MovementOut]:
-    """`include_macro` (API v2) also attaches the macro/political articles found
-    for each day's scope; v1 never sees them."""
     df = metrics[company.ticker]
     moves = df[(df.index >= start) & (df.index <= end) & (df["pct_change"].abs() >= min_change_pct)]
     if min_zscore is not None:
@@ -135,7 +127,7 @@ def build_movements(
     articles: dict[date, list[ArticleOut]] = {}
     for a in db.scalars(select(Article).where(Article.ticker == company.ticker, Article.move_date.in_(move_dates))):
         out = ArticleOut.model_validate(a, from_attributes=True)
-        out.macro_topic = macro_topic(a.title, a.snippet)  # an industry story can still be about tariffs
+        out.macro_topic = macro_topic(a.title, a.snippet)
         articles.setdefault(a.move_date, []).append(out)
 
     macro: dict[tuple[date, str], list[ArticleOut]] = {}
@@ -160,8 +152,6 @@ def build_movements(
 
         found = list(articles.get(d, []))
         if scope:
-            # The industry search and the macro search overlap (export controls...):
-            # the more specific label wins, and the article keeps its macro_topic.
             seen = {url_key(a.url) for a in found}
             found += [a for a in macro.get((d, scope), []) if url_key(a.url) not in seen]
         found = [

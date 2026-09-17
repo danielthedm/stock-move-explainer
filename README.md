@@ -25,7 +25,7 @@ context (plus a warning); with no LLM key, chat answers in an extractive (non-LL
 No keys / no network? `python -m scripts.offline_demo` runs the real API on port 8001 against
 deterministic fake upstreams (`curl "localhost:8001/v2/stocks/NVDA?start=2026-03-01&end=2026-05-31"`).
 
-Tests: `pytest -q` (58 tests, ~2s, no network).
+Tests: `pytest -q` (72 tests, ~2s, no network). Quality evals on live data: `python -m evals.run --judge`.
 
 ## API
 

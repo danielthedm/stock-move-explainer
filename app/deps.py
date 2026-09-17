@@ -1,5 +1,3 @@
-"""Provider wiring. Tests (and the offline demo) swap these via
-app.dependency_overrides, so nothing else in the code knows about vendors."""
 from functools import lru_cache
 
 from app.config import get_settings
@@ -22,7 +20,7 @@ def get_news_provider() -> NewsProvider | None:
         return ExaNewsProvider(s.exa_api_key)
     if s.newsapi_api_key:
         return NewsApiProvider(s.newsapi_api_key)
-    return None  # API still serves prices/movements, with a warning
+    return None
 
 
 @lru_cache
@@ -36,4 +34,4 @@ def get_llm() -> LLMProvider | None:
         return AnthropicLLM(s.anthropic_api_key, s.llm_model)
     if s.openai_api_key:
         return OpenAILLM(s.openai_api_key, s.llm_model)
-    return None  # chat falls back to extractive mode
+    return None

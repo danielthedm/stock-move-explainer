@@ -1,11 +1,3 @@
-"""Grounded Q&A over the stored movements + news.
-
-Design: retrieval is deterministic (the same query layer the REST endpoint
-uses), the LLM only *reads*. For one ticker over a bounded window the whole
-evidence set fits comfortably in a prompt, so stuffing a compact, numbered
-context beats tool-calling/vector search on simplicity, latency and
-debuggability. Every article gets a [n] reference so answers are citable.
-"""
 import re
 
 from app.providers.llm import LLMProvider
@@ -20,12 +12,19 @@ data in the <context> block: daily moves, what the market / sector ETF / peers d
 articles found around each move.
 
 Rules:
-- Ground every causal claim in an article and cite it inline as [n]. Never invent news, numbers or dates.
+- Ground every causal claim in an article and cite it inline as [n], one source per bracket ([1][2], not \
+[1, 2]). Never invent news, numbers or dates; quote figures exactly as the context gives them.
+- The strongest evidence is an article that itself links an event to the price reaction ("shares fell \
+after..."). Prefer it over articles that merely report an event, and name every cause such articles give.
 - Use the price context: if the market or sector moved the same way, say the move looks market- or \
 industry-driven rather than company-specific, and prefer [industry] articles. If peers were flat, prefer \
 [company] articles.
 - [macro] articles are macroeconomic or political events (rate decisions, inflation data, tariffs, export \
 controls, geopolitics, regulation). Use them to explain market-wide and industry-wide moves, and name the event.
+- Article dates are *publication* dates (date only, UTC): coverage often appears the evening of an event or \
+the next day. Never infer an event's date from a publication date, and never argue that news "came after" \
+the move on that basis.
+- The price-based driver is a heuristic. If the numbers contradict it, say so explicitly and show the numbers.
 - News explains moves probabilistically. Say "likely" / "coincided with", and say plainly when no article \
 in the context explains a move.
 - If the question is outside the context (other tickers, dates outside the window, predictions, investment \
@@ -34,7 +33,6 @@ advice), say what you can and cannot see. Do not give buy/sell advice.
 
 
 def build_context(company: CompanyOut, movements: list[MovementOut], start, end, min_change_pct: float):
-    """Returns (context_text, sources). Largest moves win if we must truncate."""
     kept = sorted(movements, key=lambda m: abs(m.pct_change), reverse=True)[:MAX_MOVEMENTS_IN_CONTEXT]
     kept.sort(key=lambda m: m.date)
 
@@ -70,6 +68,10 @@ def build_context(company: CompanyOut, movements: list[MovementOut], start, end,
     return "\n".join(lines), sources
 
 
+def cited_refs(text: str) -> set[int]:
+    return {int(n) for group in re.findall(r"\[(\d+(?:\s*,\s*\d+)*)\]", text) for n in re.findall(r"\d+", group)}
+
+
 def _fmt(v: float | None) -> str:
     return "n/a" if v is None else f"{v:+.2f}%"
 
@@ -85,18 +87,16 @@ def answer(
     message: str,
     history: list[ChatTurn],
 ) -> tuple[str, str, list[SourceOut]]:
-    """Returns (answer, mode, cited_sources)."""
     context, sources = build_context(company, movements, start, end, min_change_pct)
     if llm is None:
         return _extractive(company, movements), "extractive", sources[:10]
 
-    # Context rides with the latest user turn so earlier turns stay small.
     messages = [t.model_dump() for t in history]
-    while messages and messages[0]["role"] != "user":  # vendors require a user-first transcript
+    while messages and messages[0]["role"] != "user":
         messages.pop(0)
     messages.append({"role": "user", "content": f"<context>\n{context}\n</context>\n\nQuestion: {message}"})
     text = llm.complete(SYSTEM_PROMPT, messages)
-    cited = {int(n) for n in re.findall(r"\[(\d+)\]", text)}
+    cited = cited_refs(text)
     return text, "llm", [s for s in sources if s.ref in cited]
 
 
@@ -108,7 +108,6 @@ def explain_prompt(company: CompanyOut, movement: MovementOut) -> str:
 
 
 def _extractive(company: CompanyOut, movements: list[MovementOut]) -> str:
-    """No-LLM fallback so the endpoint stays useful (and testable) without a key."""
     if not movements:
         return f"No major movements found for {company.ticker} in this window."
     top = sorted(movements, key=lambda m: abs(m.pct_change), reverse=True)[:5]
